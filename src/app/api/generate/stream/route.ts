@@ -805,162 +805,191 @@ export async function POST(request: Request) {
           return;
         }
 
-        const client = new OpenAI({
-          apiKey: provider.apiKey,
-          baseURL: provider.baseURL,
-        });
-
-        const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
-          {
-            role: "system",
-            content: buildSystemPrompt(state.buildMode ?? "landing", payload.existingSpec != null),
-          },
-          {
-            role: "user",
-            content: buildUserPrompt(
-              payload.prompt,
-              state.buildMode ?? "landing",
-              payload.existingSpec,
-            ),
-          },
-        ];
-
-        let finalText = "";
-
-        for (let round = 0; round < 10; round += 1) {
-          state.currentPhase = `Model reasoning round ${round + 1}`;
-          push(createEvent("status", `Starting model round ${round + 1}.`, state));
-
-          const completion = await client.chat.completions.create({
-            model: provider.model,
-            messages,
-            tools: toolSchema(),
-            tool_choice: "auto",
-            ...(provider.provider === "openai" ? { temperature: 0.4 } : {}),
+        try {
+          const client = new OpenAI({
+            apiKey: provider.apiKey,
+            baseURL: provider.baseURL,
           });
 
-          const choice = completion.choices[0];
-          const message = choice?.message;
+          const messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[] = [
+            {
+              role: "system",
+              content: buildSystemPrompt(
+                state.buildMode ?? "landing",
+                payload.existingSpec != null,
+              ),
+            },
+            {
+              role: "user",
+              content: buildUserPrompt(
+                payload.prompt,
+                state.buildMode ?? "landing",
+                payload.existingSpec,
+              ),
+            },
+          ];
 
-          if (!message) {
-            break;
-          }
+          let finalText = "";
 
-          const textContent = extractMessageText(message.content);
-          const reasoningContent = extractReasoningContent(message);
+          for (let round = 0; round < 10; round += 1) {
+            state.currentPhase = `Model reasoning round ${round + 1}`;
+            push(createEvent("status", `Starting model round ${round + 1}.`, state));
 
-          if (message.tool_calls && message.tool_calls.length > 0) {
-            const assistantMessage: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam & {
-              reasoning_content?: string;
-            } = {
-              role: "assistant",
-              content: textContent || "",
-              tool_calls: message.tool_calls
-                .filter(
-                  (
-                    toolCall,
-                  ): toolCall is Extract<typeof toolCall, { type: "function" }> =>
-                    toolCall.type === "function",
-                )
-                .map((toolCall) => ({
-                  id: toolCall.id,
-                  type: "function" as const,
-                  function: {
-                    name: toolCall.function.name,
-                    arguments: toolCall.function.arguments,
-                  },
-                })),
-            };
+            const completion = await client.chat.completions.create({
+              model: provider.model,
+              messages,
+              tools: toolSchema(),
+              tool_choice: "auto",
+              ...(provider.provider === "openai" ? { temperature: 0.4 } : {}),
+            });
 
-            if (provider.provider === "kimi") {
-              assistantMessage.reasoning_content =
-                reasoningContent || textContent || "Tool planning in progress.";
-            }
+            const choice = completion.choices[0];
+            const message = choice?.message;
 
-            messages.push(assistantMessage);
-
-            for (const toolCall of message.tool_calls) {
-              if (toolCall.type !== "function") {
-                continue;
-              }
-
-              const args = parseArgs(toolCall.function.arguments);
-
-              push(
-                createEvent(
-                  "tool_call",
-                  `${toolCall.function.name} requested.`,
-                  state,
-                ),
-              );
-
-              const result = executeTool(toolCall.function.name, args, state);
-
-              push(
-                createEvent("tool_result", result.summary, state),
-              );
-
-              messages.push({
-                role: "tool",
-                tool_call_id: toolCall.id,
-                content: JSON.stringify({
-                  ok: result.ok,
-                  summary: result.summary,
-                  snapshot: snapshotFromState(state),
-                }),
-              });
-            }
-
-            if (state.spec != null && state.artifact != null) {
-              finalText =
-                "The build is complete. The spec and artifact are finalized and ready for preview.";
+            if (!message) {
               break;
             }
 
-            continue;
+            const textContent = extractMessageText(message.content);
+            const reasoningContent = extractReasoningContent(message);
+
+            if (message.tool_calls && message.tool_calls.length > 0) {
+              const assistantMessage: OpenAI.Chat.Completions.ChatCompletionAssistantMessageParam & {
+                reasoning_content?: string;
+              } = {
+                role: "assistant",
+                content: textContent || "",
+                tool_calls: message.tool_calls
+                  .filter(
+                    (
+                      toolCall,
+                    ): toolCall is Extract<typeof toolCall, { type: "function" }> =>
+                      toolCall.type === "function",
+                  )
+                  .map((toolCall) => ({
+                    id: toolCall.id,
+                    type: "function" as const,
+                    function: {
+                      name: toolCall.function.name,
+                      arguments: toolCall.function.arguments,
+                    },
+                  })),
+              };
+
+              if (provider.provider === "kimi") {
+                assistantMessage.reasoning_content =
+                  reasoningContent || textContent || "Tool planning in progress.";
+              }
+
+              messages.push(assistantMessage);
+
+              for (const toolCall of message.tool_calls) {
+                if (toolCall.type !== "function") {
+                  continue;
+                }
+
+                const args = parseArgs(toolCall.function.arguments);
+
+                push(
+                  createEvent(
+                    "tool_call",
+                    `${toolCall.function.name} requested.`,
+                    state,
+                  ),
+                );
+
+                const result = executeTool(toolCall.function.name, args, state);
+
+                push(createEvent("tool_result", result.summary, state));
+
+                messages.push({
+                  role: "tool",
+                  tool_call_id: toolCall.id,
+                  content: JSON.stringify({
+                    ok: result.ok,
+                    summary: result.summary,
+                    snapshot: snapshotFromState(state),
+                  }),
+                });
+              }
+
+              if (state.spec != null && state.artifact != null) {
+                finalText =
+                  "The build is complete. The spec and artifact are finalized and ready for preview.";
+                break;
+              }
+
+              continue;
+            }
+
+            if (textContent.trim()) {
+              finalText = textContent.trim();
+              messages.push({
+                role: "assistant",
+                content: finalText,
+              });
+              push(createEvent("assistant", finalText, state));
+            }
+
+            if (state.spec != null && state.artifact != null) {
+              break;
+            }
           }
 
-          if (textContent.trim()) {
-            finalText = textContent.trim();
-            messages.push({
-              role: "assistant",
-              content: finalText,
-            });
-            push(createEvent("assistant", finalText, state));
+          if (state.spec == null) {
+            state.spec = fallback;
           }
 
-          if (state.spec != null && state.artifact != null) {
-            break;
+          if (state.artifact == null) {
+            state.artifact = renderArtifactFromSpec(state.spec);
           }
+
+          if (!finalText) {
+            finalText = "The build loop completed and the artifact is ready.";
+          }
+
+          state.currentAgent = "Preview";
+          state.currentPhase = "Loop completed";
+
+          push(createEvent("assistant", finalText, state));
+
+          push({
+            ...createEvent("completed", "Agent loop completed.", state),
+            payload: {
+              source: provider.provider,
+              spec: state.spec,
+              artifact: state.artifact,
+            },
+          });
+        } catch (providerError) {
+          const providerMessage =
+            providerError instanceof Error
+              ? providerError.message
+              : "Unknown provider failure";
+
+          state.currentAgent = "System";
+          state.currentPhase = "Fallback to local loop";
+          push(
+            createEvent(
+              "status",
+              `Live provider failed (${provider.provider}). Falling back to local build loop.`,
+              state,
+            ),
+          );
+          push(createEvent("tool_result", providerMessage, state));
+
+          await streamMockLoop(state, push);
+          push({
+            ...createEvent("completed", "Build completed with local fallback loop.", state),
+            payload: {
+              source: "mock",
+              spec: state.spec ?? fallback,
+              artifact:
+                state.artifact ??
+                renderArtifactFromSpec(state.spec ?? fallback),
+            },
+          });
         }
-
-        if (state.spec == null) {
-          state.spec = fallback;
-        }
-
-        if (state.artifact == null) {
-          state.artifact = renderArtifactFromSpec(state.spec);
-        }
-
-        if (!finalText) {
-          finalText = "The build loop completed and the artifact is ready.";
-        }
-
-        state.currentAgent = "Preview";
-        state.currentPhase = "Loop completed";
-
-        push(
-          createEvent("assistant", finalText, state),
-        );
-
-        push({
-          ...createEvent("completed", "Agent loop completed.", state),
-          payload: {
-            source: provider.provider,
-            spec: state.spec,
-            artifact: state.artifact,
-          },
-        });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Unknown stream failure";

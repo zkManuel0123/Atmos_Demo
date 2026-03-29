@@ -441,6 +441,7 @@ export function AtomsStudio() {
     return (
       <main className="mx-auto flex min-h-screen w-full max-w-[1480px] flex-col px-4 py-5 lg:px-8">
         <LandingNav
+          isSignedIn={!!isSignedIn}
           onOpenWorkspace={
             activeProjectId != null ? () => setViewMode("workspace") : undefined
           }
@@ -866,10 +867,12 @@ function formatEventType(type: LoopEvent["type"]) {
 }
 
 function LandingNav({
+  isSignedIn,
   onOpenWorkspace,
   onGoHome,
   onReset,
 }: {
+  isSignedIn: boolean;
   onOpenWorkspace?: () => void;
   onGoHome?: () => void;
   onReset?: () => void;
@@ -904,6 +907,18 @@ function LandingNav({
             清空本地记忆
           </button>
         ) : null}
+        {isSignedIn ? (
+          <UserButton />
+        ) : (
+          <SignInButton mode="redirect">
+            <button
+              className="rounded-full border border-black/8 bg-white px-3 py-2 text-xs font-medium text-black/75 transition hover:bg-black hover:text-white"
+              type="button"
+            >
+              登录 / 注册
+            </button>
+          </SignInButton>
+        )}
       </div>
     </header>
   );
