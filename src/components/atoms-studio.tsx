@@ -48,6 +48,26 @@ type StreamCompletedPayload = {
   artifact: WebArtifact;
 };
 
+async function fetchFallbackGeneration(body: {
+  prompt: string;
+  existingSpec: AppSpec | null;
+  existingArtifact: WebArtifact | null;
+}) {
+  const response = await fetch("/api/generate", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error("普通生成接口也失败了。");
+  }
+
+  return (await response.json()) as StreamCompletedPayload;
+}
+
 function createId() {
   return crypto.randomUUID();
 }
@@ -314,62 +334,77 @@ export function AtomsStudio() {
           : ensuredProject.versions.find(
               (version) => version.id === ensuredProject.activeVersionId,
             ) ?? null;
+      const requestBody = {
+        prompt: trimmed,
+        existingSpec: activeVersion?.spec ?? null,
+        existingArtifact: activeVersion?.artifact ?? null,
+      };
 
       const response = await fetch("/api/generate/stream", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          prompt: trimmed,
-          existingSpec: activeVersion?.spec ?? null,
-          existingArtifact: activeVersion?.artifact ?? null,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
-      if (!response.ok) {
-        throw new Error("生成失败");
-      }
-
-      if (response.body == null) {
-        throw new Error("缺少流式响应内容。");
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
       let completedPayload: StreamCompletedPayload | null = null;
+      let streamFailed = false;
 
-      while (true) {
-        const { done, value } = await reader.read();
+      if (response.ok && response.body != null) {
+        try {
+          const reader = response.body.getReader();
+          const decoder = new TextDecoder();
+          let buffer = "";
 
-        if (done) {
-          break;
+          while (true) {
+            const { done, value } = await reader.read();
+
+            if (done) {
+              break;
+            }
+
+            buffer += decoder.decode(value, { stream: true });
+            const parsed = parseSseChunk(buffer);
+            buffer = parsed.remainder;
+
+            for (const event of parsed.events) {
+              setLoopEvents((current) => [...current, event]);
+
+              if (event.snapshot != null) {
+                setLoopSnapshot(event.snapshot);
+              }
+
+              if (event.type === "completed" && event.payload != null) {
+                completedPayload = event.payload;
+              }
+
+              if (event.type === "error") {
+                streamFailed = true;
+              }
+            }
+          }
+        } catch {
+          streamFailed = true;
         }
-
-        buffer += decoder.decode(value, { stream: true });
-        const parsed = parseSseChunk(buffer);
-        buffer = parsed.remainder;
-
-        for (const event of parsed.events) {
-          setLoopEvents((current) => [...current, event]);
-
-          if (event.snapshot != null) {
-            setLoopSnapshot(event.snapshot);
-          }
-
-          if (event.type === "completed" && event.payload != null) {
-            completedPayload = event.payload;
-          }
-
-          if (event.type === "error") {
-            throw new Error(event.message);
-          }
-        }
+      } else {
+        streamFailed = true;
       }
 
       if (completedPayload == null) {
-        throw new Error("生成流结束时没有拿到最终结果。");
+        setLoopEvents((current) => [
+          ...current,
+          {
+            type: "status",
+            message: streamFailed
+              ? "流式生成未完整返回，正在切换到保底生成链路。"
+              : "流式结果未完整结束，正在补拉最终结果。",
+            timestamp: new Date().toISOString(),
+            agent: "System",
+            phase: "Fallback",
+          },
+        ]);
+        completedPayload = await fetchFallbackGeneration(requestBody);
       }
 
       const version: GeneratedVersion = {
