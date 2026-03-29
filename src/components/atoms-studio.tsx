@@ -1,6 +1,8 @@
 "use client";
 
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { UserButton } from "@clerk/nextjs";
+import Image from "next/image";
 
 import { AppPreview } from "@/components/app-preview";
 import { renderArtifactFromSpec } from "@/lib/mock-generator";
@@ -431,9 +433,11 @@ export function AtomsStudio() {
         />
         <section className="flex flex-1 items-center justify-center py-12">
           <div className="w-full max-w-[960px] text-center">
-            <img
+            <Image
               src="/preview.png"
               alt="product preview"
+              width={300}
+              height={192}
               className="mx-auto mb-6 w-full max-w-[300px] rounded-2xl shadow-[0_16px_48px_rgba(0,0,0,0.12)]"
             />
             <div className="mt-2 text-xs font-semibold tracking-[0.24em] text-black/40">
@@ -608,6 +612,7 @@ export function AtomsStudio() {
                   清空记忆
                 </button>
               ) : null}
+              <UserButton />
             </div>
           </div>
         </div>
@@ -819,18 +824,6 @@ export function AtomsStudio() {
       </div>
     </main>
   );
-}
-
-function formatTodoStatus(status: "pending" | "in_progress" | "completed") {
-  if (status === "completed") {
-    return "已完成";
-  }
-
-  if (status === "in_progress") {
-    return "执行中";
-  }
-
-  return "待执行";
 }
 
 function formatEventType(type: LoopEvent["type"]) {
