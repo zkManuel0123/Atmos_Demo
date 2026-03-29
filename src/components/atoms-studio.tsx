@@ -1,7 +1,12 @@
 "use client";
 
 import { startTransition, useEffect, useMemo, useRef, useState } from "react";
-import { UserButton } from "@clerk/nextjs";
+import {
+  SignInButton,
+  UserButton,
+  useAuth,
+  useClerk,
+} from "@clerk/nextjs";
 import Image from "next/image";
 
 import { AppPreview } from "@/components/app-preview";
@@ -146,6 +151,8 @@ function parseSseChunk(buffer: string) {
 }
 
 export function AtomsStudio() {
+  const { isSignedIn } = useAuth();
+  const { redirectToSignIn } = useClerk();
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const [viewMode, setViewMode] = useState<StudioView>("landing");
@@ -273,6 +280,14 @@ export function AtomsStudio() {
 
     if (trimmed.length < 3) {
       setError("请输入更完整一点的需求。");
+      return;
+    }
+
+    if (!isSignedIn) {
+      setError("首次生成前请先登录或注册。");
+      await redirectToSignIn({
+        redirectUrl: window.location.href,
+      });
       return;
     }
 
@@ -470,7 +485,7 @@ export function AtomsStudio() {
                   onClick={() => void runGeneration({ forceNew: true })}
                   type="button"
                 >
-                  {isGenerating ? "生成中..." : "开始生成"}
+                  {isGenerating ? "生成中..." : isSignedIn ? "开始生成" : "登录后开始生成"}
                 </button>
               </div>
             </section>
@@ -612,7 +627,18 @@ export function AtomsStudio() {
                   清空记忆
                 </button>
               ) : null}
-              <UserButton />
+              {isSignedIn ? (
+                <UserButton />
+              ) : (
+                <SignInButton mode="redirect">
+                  <button
+                    className="rounded-full border border-white/10 bg-white px-3 py-1.5 text-xs font-medium text-black transition hover:bg-white/90"
+                    type="button"
+                  >
+                    登录 / 注册
+                  </button>
+                </SignInButton>
+              )}
             </div>
           </div>
         </div>
